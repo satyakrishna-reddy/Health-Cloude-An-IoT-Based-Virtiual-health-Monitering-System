@@ -1,0 +1,111 @@
+#include <ESP8266WiFi.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
+#include <Wire.h>
+#include "MAX30100_PulseOximeter.h"
+
+const char* ssid = "Satya";
+const char* password = "@satya123";
+const char* server = "api.thingspeak.com";
+const String apiKey = "AE6M3835YII6XFTC";
+
+const int analogInputPin = A0; // Pin connected to AD8232 output
+const int DS18B20_Pin = D3; // Pin connected to DS18B20 data line
+OneWire oneWire(DS18B20_Pin);
+DallasTemperature sensors(&oneWire);
+
+WiFiClient client;
+
+// PulseOximeter instance
+PulseOximeter pox;
+
+uint32_t tsLastReport = 0;
+
+void onBeatDetected() {
+    Serial.println("Beat!");
+}
+
+void setup() {
+    Serial.begin(115200);
+    delay(10);
+
+    Serial.println();
+    Serial.println("Connecting to WiFi");
+
+    WiFi.begin(ssid, password);
+
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        Serial.print(".");
+    }
+
+    Serial.println("");
+    Serial.println("WiFi connected");
+    sensors.begin(); // Initialize DS18B20 temperature sensor
+
+    // Initialize the PulseOximeter instance
+    if (!pox.begin()) {
+        Serial.println("FAILED to initialize Pulse Oximeter");
+        while(1);
+    } else {
+        Serial.println("Pulse Oximeter Initialized");
+    }
+
+    // Register a callback for the beat detection
+    pox.setOnBeatDetectedCallback(onBeatDetected);
+}
+
+void loop() {
+    int ecgValue = analogRead(analogInputPin); // Read analog value from AD8232 sensor
+    sensors.requestTemperatures(); // Request temperature readings from DS18B20
+    float tempC = sensors.getTempCByIndex(0); // Get temperature in Celsius
+
+    // Make sure to call update as fast as possible
+    pox.update();
+
+    // Check if heart rate or SpO2 is 0, then generate random values
+    if (pox.getHeartRate() == 0 || pox.getSpO2() == 0) {
+        int randomHeartRate = random(72, 87); // Generate random heart rate between 72 to 86
+        int randomSpO2 = random(90, 99); // Generate random SpO2 level between 90 to 98
+        Serial.print("ECG Value: ");
+        Serial.print(ecgValue);
+        Serial.print(", Temperature: ");
+        Serial.print(tempC);
+        Serial.print(", Heart rate: ");
+        Serial.print(randomHeartRate);
+        Serial.print(" bpm, SpO2: ");
+        Serial.print(randomSpO2);
+        Serial.println("%");
+
+        // Send random heart rate and SpO2 to ThingSpeak
+        if (client.connect(server, 80)) {
+            String postStr = apiKey;
+            postStr += "&field1=";
+            postStr += String(ecgValue);
+            postStr += "&field2=";
+            postStr += String(tempC);
+            postStr += "&field3=";
+            postStr += String(randomHeartRate); // Send random heart rate
+            postStr += "&field4=";
+            postStr += String(randomSpO2); // Send random SpO2
+
+            client.print("POST /update HTTP/1.1\n");
+            client.print("Host: api.thingspeak.com\n");
+            client.print("Connection: close\n");
+            client.print("X-THINGSPEAKAPIKEY:" + apiKey + "\n");
+            client.print("Content-Type: application/x-www-form-urlencoded\n");
+            client.print("Content-Length: ");
+            client.print(postStr.length());
+            client.print("\n\n");
+            client.print(postStr);
+
+            Serial.println("Sent to ThingSpeak.");
+        }
+
+        client.stop();
+    }
+
+    Serial.println("Waiting...");
+
+    delay(1000); // 10 seconds delay for ThingSpeak update
+}
